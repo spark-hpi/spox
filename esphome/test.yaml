@@ -1,0 +1,189 @@
+# This is a file to flash onto the esp for testing purposes.
+esphome:
+  name: c6-mini
+  friendly_name: C6 Mini
+  on_boot:
+    priority: 1100  #power rails up first, 
+    then:
+      # we are setting the output power of GPIO 2 and 3 high so that we can use them as VCC
+      # for J11 and J5
+      - lambda: |-
+          gpio_set_direction((gpio_num_t)2, GPIO_MODE_OUTPUT);
+          gpio_set_level((gpio_num_t)2, 1);
+          gpio_set_direction((gpio_num_t)3, GPIO_MODE_OUTPUT);
+          gpio_set_level((gpio_num_t)3, 1);
+      - delay: 200ms
+
+# esp config
+esp32:
+  board: esp32-c6-devkitc-1
+  variant: esp32c6
+  framework:
+    type: esp-idf
+
+# ld2450 config
+ld2450:
+  id: ld2450_radar
+
+# font config
+font:
+  - file: "gfonts://Roboto"
+    id: my_font
+    size: 14
+
+# protocols    
+i2c:
+  - id: bus_a
+    sda: GPIO4
+    scl: GPIO5
+    scan: true
+    frequency: 100kHz
+
+uart:
+  tx_pin: GPIO14
+  rx_pin: GPIO15
+  baud_rate: 256000    # LD2450 was reconfigured away from 256000 default
+  debug:
+    direction: BOTH
+    dummy_receiver: false
+    after:
+      bytes: 32
+    sequence:
+      - lambda: UARTDebug::log_hex(direction, bytes, ' ');
+
+
+switch:
+  - platform: gpio
+    pin: GPIO2
+    name: "J5 Power (D2)"
+    id: j5_power
+    restore_mode: ALWAYS_ON
+  - platform: gpio
+    pin: GPIO3
+    name: "J11 Power (D3)"
+    id: j11_power
+    restore_mode: ALWAYS_ON
+
+
+# components
+display:
+  - platform: ssd1306_i2c
+    i2c_id: bus_a
+    model: "SSD1306 128x32"
+    address: 0x3C
+    rotation: 180
+    lambda: |-
+      it.printf(0, 0, id(my_font), "mW: %.0f", (id(mmdt).state/10));
+      it.printf(it.get_width(), 0, id(my_font), TextAlign::TOP_RIGHT, "H: %.1f", id(bmehum).state);
+      it.printf(0, 32, id(my_font), TextAlign::BOTTOM_LEFT, "T: %.1f", id(bmetemp).state);
+          
+# bme + mmW sensor config
+sensor:
+  - platform: bme680
+    i2c_id: bus_a
+    address: 0x77
+    update_interval: 5s
+    temperature:
+      name: "BME680 Temperature"
+      oversampling: 16x
+      id: bmetemp
+    pressure:
+      name: "BME680 Pressure"
+    humidity:
+      name: "BME680 Humidity"
+      id: bmehum
+    gas_resistance:
+      name: "BME680 Gas Resistance"
+  - platform: ld2450
+    ld2450_id: ld2450_radar
+    target_count:
+      name: Presence Target Count
+    still_target_count:
+      name: Still Target Count
+    moving_target_count:
+      name: Moving Target Count
+    target_1:
+      x:
+        name: Target-1 X
+      y:
+        name: Target-1 Y
+      speed:
+        name: Target-1 Speed
+      angle:
+        name: Target-1 Angle
+      distance:
+        name: Target-1 Distance
+        id: mmdt
+      resolution:
+        name: Target-1 Resolution
+    target_2:
+      x:
+        name: Target-2 X
+      y:
+        name: Target-2 Y
+      speed:
+        name: Target-2 Speed
+      angle:
+        name: Target-2 Angle
+      distance:
+        name: Target-2 Distance
+      resolution:
+        name: Target-2 Resolution
+    target_3:
+      x:
+        name: Target-3 X
+      y:
+        name: Target-3 Y
+      speed:
+        name: Target-3 Speed
+      angle:
+        name: Target-3 Angle
+      distance:
+        name: Target-3 Distance
+      resolution:
+        name: Target-3 Resolution
+    zone_1:
+      target_count:
+        name: Zone-1 All Target Count
+      still_target_count:
+        name: Zone-1 Still Target Count
+      moving_target_count:
+        name: Zone-1 Moving Target Count
+    zone_2:
+      target_count:
+        name: Zone-2 All Target Count
+      still_target_count:
+        name: Zone-2 Still Target Count
+      moving_target_count:
+        name: Zone-2 Moving Target Count
+    zone_3:
+      target_count:
+        name: Zone-3 All Target Count
+      still_target_count:
+        name: Zone-3 Still Target Count
+      moving_target_count:
+        name: Zone-3 Moving Target Count
+
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+# api:
+#   encryption:
+#     key: "XXXXXX"
+# ota:
+#   - platform: esphome
+
+
+# wifi:
+#   ssid: "XXXXX"
+#   password: "XXXXXXXX"
+
+#   # Enable fallback hotspot (captive portal) in case wifi connection fails
+#   ap:
+#     ssid: " Fallback Hotspot"
+#     password: "L1UVED2AAZZn"
+
+# captive_portal:
+ 

@@ -1,0 +1,174 @@
+esphome:
+  name: c6-mini
+  friendly_name: C6 Mini
+  # dashboard page-cycler UI lives in this header (pure C++ drawing)
+  includes:
+    - paging_dashboard.h
+  on_boot:
+    priority: 1100  # power rails up first
+    then:
+      # drive GPIO2/3 high so J5 / J11 get VCC (sensors hang off those headers)
+      - lambda: |-
+          gpio_set_direction((gpio_num_t)2, GPIO_MODE_OUTPUT);
+          gpio_set_level((gpio_num_t)2, 1);
+          gpio_set_direction((gpio_num_t)3, GPIO_MODE_OUTPUT);
+          gpio_set_level((gpio_num_t)3, 1);
+      - delay: 200ms
+
+esp32:
+  board: esp32-c6-devkitc-1
+  variant: esp32c6
+  framework:
+    type: esp-idf
+
+# LD2450 mmWave radar. UART settings below follow the official component docs:
+#   https://esphome.io/components/sensor/ld2450/  (parity NONE, stop_bits 1, 256000 baud)
+ld2450:
+  id: ld2450_radar
+  uart_id: uart_ld2450    # bind explicitly (ESPHome LD2450 docs recommend this)
+
+font:
+  # big value font + smaller label font for a clean hierarchy
+  - file: "gfonts://Roboto"
+    id: big_font
+    size: 18
+  - file: "gfonts://Roboto"
+    id: small_font
+    size: 10
+
+i2c:
+  - id: bus_a
+    sda: GPIO4
+    scl: GPIO5
+    scan: true
+    frequency: 400kHz
+
+uart:
+  id: uart_ld2450
+  tx_pin: GPIO14
+  rx_pin: GPIO15
+  baud_rate: 256000      # LD2450 factory default
+  parity: NONE           # LD2450 docs: parity MUST be NONE
+  stop_bits: 1           # LD2450 docs: stop_bits MUST be 1
+  rx_buffer_size: 1024   # >256 default: absorb radar frames while the display loop is busy
+
+switch:
+  - platform: gpio
+    pin: GPIO2
+    name: "J5 Power (D2)"
+    id: j5_power
+    restore_mode: ALWAYS_ON
+  - platform: gpio
+    pin: GPIO3
+    name: "J11 Power (D3)"
+    id: j11_power
+    restore_mode: ALWAYS_ON
+
+# Hold the BOOT button (GPIO9) for 3s to wipe stored preferences (incl. the
+# BSEC2 air-quality calibration) and reboot -> BSEC2 restarts at "Stabilizing".
+# No network is configured, so a physical long-press is the trigger.
+button:
+  - platform: factory_reset
+    id: reset_calibration
+    name: "Reset Air Calibration"   # shows up in Home Assistant once API is enabled
+
+binary_sensor:
+  - platform: gpio
+    id: boot_button
+    name: "BOOT button"
+    pin:
+      number: GPIO9
+      mode:
+        input: true
+        pullup: true
+      inverted: true   # button pulls GPIO9 to GND -> pressed = ON
+    on_click:
+      min_length: 3000ms
+      max_length: 15000ms
+      then:
+        - logger.log: "BOOT held 3s -> clearing BSEC2 calibration and rebooting"
+        - button.press: reset_calibration
+
+# Bosch BSEC2 hub: runs the proprietary IAQ algorithm on the BME680.
+# sample_rate LP = one fused sample every 3s; calibration state persisted to flash.
+bme68x_bsec2_i2c:
+  i2c_id: bus_a
+  address: 0x77
+  model: bme680
+  operating_age: 28d
+  sample_rate: LP
+  supply_voltage: 3.3V
+  state_save_interval: 30min    # persist BSEC2 calibration (if device gets unplugged)
+
+display:
+  - platform: ssd1306_i2c
+    i2c_id: bus_a
+    model: "SSD1306 128x32"
+    address: 0x3C
+    rotation: 180
+    update_interval: 100ms     # smooth progress bar
+    lambda: |-
+      // read sensors here (id() only works in the lambda), hand plain values
+      // to the page-cycler UI in paging_dashboard.h
+      dash::Readings r;
+      r.temp_c       = id(bmetemp).state;
+      r.humidity     = id(bmehum).state;
+      r.pressure_hpa = id(bmepress).state;
+      r.iaq          = id(iaqv).state;
+      r.co2_eq       = id(eco2).state;
+      r.voc_eq       = id(bvoc).state;
+      r.gas_ohm      = id(bmegas).state;
+      r.people       = id(target_total).state;
+      r.distance_mm  = id(mmdt).state;
+      std::string acc = id(iaqacc).state;  // keep alive for the draw call
+      r.iaq_accuracy = acc.c_str();
+      dash::draw(it, millis(), r, id(big_font), id(small_font));
+
+sensor:
+  - platform: bme68x_bsec2
+    temperature:
+      name: "BME680 Temperature"
+      id: bmetemp
+    pressure:
+      name: "BME680 Pressure"
+      id: bmepress
+    humidity:
+      name: "BME680 Humidity"
+      id: bmehum
+    gas_resistance:
+      name: "BME680 Gas Resistance"
+      id: bmegas
+    iaq:
+      name: "IAQ"
+      id: iaqv
+    co2_equivalent:
+      name: "CO2 Equivalent"
+      id: eco2
+    breath_voc_equivalent:
+      name: "Breath VOC Equivalent"
+      id: bvoc
+  - platform: ld2450
+    ld2450_id: ld2450_radar
+    target_count:
+      name: Presence Target Count
+      id: target_total
+    still_target_count:
+      name: Still Target Count
+    moving_target_count:
+      name: Moving Target Count
+    target_1:
+      x:
+        name: Target-1 X
+      y:
+        name: Target-1 Y
+      distance:
+        name: Target-1 Distance
+        id: mmdt
+
+text_sensor:
+  - platform: bme68x_bsec2
+    iaq_accuracy:
+      name: "IAQ Accuracy"
+      id: iaqacc
+
+logger:
